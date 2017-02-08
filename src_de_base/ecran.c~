@@ -1,0 +1,144 @@
+#include <cpu.h>
+#include <string.h>
+#include <inttypes.h>
+
+uint8_t ligne = 0;
+uint8_t colonne = 0;
+
+void find_curseur(uint8_t *lig,uint8_t *col){
+  uint16_t pos = 0;
+  uint16_t pos_temp;
+  uint8_t ligne_counter = 0;
+  outb(0xE, 0x3D4);
+  pos = inb(0x3D5);
+  pos = pos << 8;
+  outb(0xF, 0x3D4);
+  pos = inb(0x3D5) | pos;
+  pos_temp = pos;
+  while(pos > 79){
+    pos = pos - 79;
+    ligne_counter = ligne_counter + 1;
+  }
+  *lig = ligne_counter;
+  *col = pos_temp - 80*ligne_counter;
+} 
+
+//  place le curseur à la position donné
+void place_curseur(uint32_t lig, uint32_t col){
+  uint16_t pos = col + lig*80;
+  outb(0xF, 0x3D4);
+  outb((uint8_t)pos, 0x3D5);
+  pos = pos >> 8;
+  outb(0xE, 0x3D4);
+  outb((uint8_t)pos, 0x3D5);
+  
+}
+
+// renvoie un pointeur sur la case mémoire correspondant
+uint16_t *ptr_mem(uint32_t lig, uint32_t col){
+  uint16_t* p;
+  p = (uint16_t*) (0xB8000 + 2*(lig*80 + col));
+  return p;
+}
+
+// écrit le caractère c aux coordonnées spécifiées
+void ecrit_car(uint32_t lig, uint32_t col, char c){
+  uint16_t* p;
+  p = (uint16_t*) (0xB8000 + 2*(lig*80 + col));
+  *p = c | (0x07 << 8);
+}
+
+// efface tous les 2000 pixels
+void efface_ecran(void){
+  uint16_t* p;
+  for(uint8_t i = 0; i <= 24; i++){
+    for(uint8_t j = 0; j <= 79; j++){
+      p = (uint16_t*) (0xB8000 + 2*(i*80 + j));
+      *p = 0;
+    }
+  }
+}
+
+void efface_ligne(void){
+  uint16_t* p;
+  for(uint8_t i = 0; i <= 79; i++){
+    p = ptr_mem(ligne,i);
+    *p = 0;
+  } 
+}
+
+void next_pos(uint8_t *lig, uint8_t *col){
+  *col = *col + 1;
+  if(*col > 79){
+    *col = 0;
+    *lig = *lig + 1;
+  }
+} 
+
+//traite un caractère donné 
+void traite_car(char c){
+  find_curseur(&ligne,&colonne);
+  if((c >= 32) && (c <= 126)){   
+    ecrit_car(ligne,colonne,c);
+    next_pos(&ligne,&colonne);
+    place_curseur(ligne, colonne);
+  }else{
+    switch(c){
+    case '\b':	
+      if(colonne > 0){
+	colonne = colonne - 1;
+      }
+      place_curseur(ligne, colonne);
+      break;
+    case '\t':
+      if((colonne >= 72) && (colonne <= 79)){
+	colonne = 79;
+      }else{
+	colonne +=1;
+	while(colonne % 8 != 0){
+	  colonne += 1;
+	}
+	place_curseur(ligne,colonne);
+      }
+      break;
+    case '\n':
+      ligne = ligne + 1;
+      colonne = 0;
+      place_curseur(ligne,0);
+      break;
+    case '\f':
+      efface_ecran();
+      colonne = 0;
+      ligne = 0;
+      place_curseur(0,0);
+      break;
+    case '\r':
+      colonne = 0;
+      place_curseur(ligne,0);
+      break;
+    }
+  }
+}
+
+void defilement(void){
+  uint8_t size = 80;
+  uint16_t *from, *to;
+  for(int i = 1; i <= 24; i++){
+    from = ptr_mem(i,0);
+    to = ptr_mem(i - 1,0);
+    memmove(to,from,size);
+  }
+  ligne = 24;
+  colonne = 0;
+  efface_ligne();
+  place_curseur(ligne,colonne);   
+}
+
+void console_putbytes(char *chaine,int32_t taille){
+  for(int32_t i = 0; i < taille; i++){
+    traite_car(chaine[i]);
+    if(ligne > 24){
+      defilement();
+    }
+  }
+}
